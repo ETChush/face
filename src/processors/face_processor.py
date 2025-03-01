@@ -90,6 +90,7 @@ class FaceProcessor:
                 "检测人脸",
                 "提取关键点",
                 "提取特征",
+                "检测年龄",
                 "对齐图片",
                 "保存结果"
             ]
@@ -143,16 +144,24 @@ class FaceProcessor:
                 pbar.update(1)
                 pbar.set_description(f"处理基准图片 - {steps[5]}")
 
-                # 6. 图片对齐
+                # 6. 年龄检测
+                age = self.arcface_extractor.get_age(face_img, debug)
+                if age is None:
+                    logger.warning("年龄检测失败，使用默认年龄0")
+                    age = 0
+                pbar.update(1)
+                pbar.set_description(f"处理基准图片 - {steps[6]}")
+
+                # 7. 图片对齐
                 aligned_img, transformed_points = self.face_aligner.align_image(
                     img, keypoints, target_size=base_size, debug=debug
                 )
                 pbar.update(1)
-                pbar.set_description(f"处理基准图片 - {steps[6]}")
+                pbar.set_description(f"处理基准图片 - {steps[7]}")
 
-                # 7. 保存结果
+                # 8. 保存结果
                 base_name = os.path.splitext(os.path.basename(img_path))[0]
-                aligned_path = os.path.join(output_dir, f"{base_name}.png")
+                aligned_path = os.path.join(output_dir, f"age_{int(age):03d}_{base_name}.png")
                 save_image(aligned_img, aligned_path)
 
                 if debug:
@@ -180,6 +189,7 @@ class FaceProcessor:
                 "eye_distance": np.linalg.norm(transformed_points[1] - transformed_points[0]),
                 "original_img": img,
                 "aligned_img": aligned_img,
+                "age": age,
             }
 
         except Exception as e:
@@ -364,7 +374,7 @@ class FaceProcessor:
                     save_image(arcface_input, arcface_path)
                     logger.debug(f"ArcFace输入图像已保存: {os.path.basename(arcface_path)}")
 
-            # 如果找到了最佳匹配的人脸且相似度超过阈值，进行图片对齐
+            # 如果找到了最佳匹配的人脸且相似度超过阈值，进行图片对齐和年龄检测
             if best_face is not None and best_face["similarity"] >= similarity_threshold:
                 # 获取目标尺寸和眼睛间距
                 TARGET_HEIGHT, TARGET_WIDTH = base_data["img_size"]
@@ -379,10 +389,21 @@ class FaceProcessor:
                     debug=debug
                 )
 
-                # 保存对齐后的图片，使用PNG格式
+                # 检测年龄
+                face_idx = best_face["index"]
+                face_img = face_imgs[face_idx]
+                age = self.arcface_extractor.get_age(face_img, debug)
+                if age is None:
+                    logger.warning("年龄检测失败，使用默认年龄0")
+                    age = 0
+
+                # 保存对齐后的图片，使用年龄作为文件名前缀
                 base_name = os.path.splitext(os.path.basename(input_path))[0]
-                output_path = os.path.join(output_dir, f"{base_name}.png")
+                output_path = os.path.join(output_dir, f"age_{int(age):03d}_{base_name}.png")
                 save_image(aligned_img, output_path)
+
+                if debug:
+                    logger.debug(f"检测到年龄: {age:.1f}岁")
             else:
                 if debug:
                     if best_face is None:

@@ -28,7 +28,7 @@ class ArcFaceExtractor:
             self.model = FaceAnalysis(
                 name="buffalo_l",
                 providers=["CPUExecutionProvider"],
-                allowed_modules=["recognition", "detection"],
+                allowed_modules=["recognition", "detection", "genderage"],
             )
             logger.debug("准备 ArcFace 模型")
             self.model.prepare(ctx_id=0)
@@ -208,4 +208,49 @@ class ArcFaceExtractor:
             if debug:
                 logger.debug(f"生成随机特征向量，特征向量形状: {embedding.shape}")
 
-            return embedding 
+            return embedding
+
+    def get_age(self, face_img: np.ndarray, debug: bool = False) -> Optional[float]:
+        """获取人脸年龄
+
+        Args:
+            face_img: 人脸图像
+            debug: 是否启用调试模式
+
+        Returns:
+            Optional[float]: 预测的年龄，如果失败则返回None
+        """
+        try:
+            if debug:
+                logger.debug("开始预测年龄")
+
+            # 预处理人脸图像
+            face_rgb = self.preprocess_face(face_img, debug)
+            
+            # 获取年龄预测模型
+            genderage_model = self.model.models.get("genderage", None)
+            if genderage_model is None:
+                if debug:
+                    logger.debug("未找到年龄预测模型")
+                return None
+
+            # 预测性别和年龄
+            faces = self.model.get(face_rgb)
+            if not faces:
+                if debug:
+                    logger.debug("未检测到人脸")
+                return None
+
+            # 获取年龄预测结果
+            age = faces[0].age
+            
+            if debug:
+                logger.debug(f"预测年龄: {age:.1f}岁")
+                logger.debug(f"预测性别: {'男' if faces[0].gender == 1 else '女'}")
+
+            return age
+
+        except Exception as e:
+            if debug:
+                logger.error(f"年龄预测失败: {str(e)}")
+            return None 
