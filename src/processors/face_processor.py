@@ -54,7 +54,8 @@ class FaceProcessor:
     def process_base_image(
         self, img_path: str, output_dir: str, debug_dir: str, debug: bool, 
         base_size: Optional[Tuple[int, int]] = (1080, 1920),
-        add_border: bool = True
+        add_border: bool = True,
+        use_age_prefix: bool = True  # 添加参数控制是否使用年龄前缀
     ) -> Dict[str, Any]:
         """处理基准图片
 
@@ -75,6 +76,7 @@ class FaceProcessor:
             debug: 是否启用调试模式
             base_size: 基准图片的目标尺寸 (height, width)，默认为 (1080, 1920)
             add_border: 是否添加白边，默认为True
+            use_age_prefix: 是否使用年龄作为文件名前缀，默认为True
 
         Returns:
             Dict[str, Any]: 包含基准图片信息的字典
@@ -161,7 +163,12 @@ class FaceProcessor:
 
                 # 8. 保存结果
                 base_name = os.path.splitext(os.path.basename(img_path))[0]
-                aligned_path = os.path.join(output_dir, f"age_{int(age):03d}_{base_name}.png")
+                # 根据use_age_prefix决定文件名格式
+                if use_age_prefix:
+                    output_name = f"age_{int(age):03d}_{base_name}.png"
+                else:
+                    output_name = f"{base_name}.png"
+                aligned_path = os.path.join(output_dir, output_name)
                 save_image(aligned_img, aligned_path)
 
                 if debug:
@@ -205,6 +212,7 @@ class FaceProcessor:
         debug: bool,
         similarity_threshold: float = 0.5,
         add_border: bool = True,
+        use_age_prefix: bool = True,  # 添加参数控制是否使用年龄前缀
     ) -> None:
         """处理单张图片
 
@@ -222,6 +230,7 @@ class FaceProcessor:
             debug: 是否启用调试模式
             similarity_threshold: 人脸相似度阈值，默认0.5
             add_border: 是否添加白边，默认为True
+            use_age_prefix: 是否使用年龄作为文件名前缀，默认为True
         """
         try:
             img = read_image(input_path)
@@ -397,9 +406,14 @@ class FaceProcessor:
                     logger.warning("年龄检测失败，使用默认年龄0")
                     age = 0
 
-                # 保存对齐后的图片，使用年龄作为文件名前缀
+                # 保存对齐后的图片
                 base_name = os.path.splitext(os.path.basename(input_path))[0]
-                output_path = os.path.join(output_dir, f"age_{int(age):03d}_{base_name}.png")
+                # 根据use_age_prefix决定文件名格式
+                if use_age_prefix:
+                    output_name = f"age_{int(age):03d}_{base_name}.png"
+                else:
+                    output_name = f"{base_name}.png"
+                output_path = os.path.join(output_dir, output_name)
                 save_image(aligned_img, output_path)
 
                 if debug:
@@ -423,11 +437,12 @@ class FaceProcessor:
         output_dir: str,
         debug: bool = False,
         similarity_threshold: float = 0.5,
-        base_size: Optional[Tuple[int, int]] = (1080, 1920),  # 默认尺寸为 1920x1080
-        add_border: bool = True,  # 是否添加白边
-        create_video: bool = True,  # 是否生成视频
-        fps: int = 30,  # 视频帧率
-        transition_frames: int = 30,  # 过渡帧数
+        base_size: Optional[Tuple[int, int]] = (1080, 1920),
+        add_border: bool = True,
+        create_video: bool = True,
+        fps: int = 30,
+        transition_frames: int = 30,
+        use_age_prefix: bool = True,  # 添加参数控制是否使用年龄前缀
     ) -> None:
         """处理目录中的所有图片
 
@@ -441,6 +456,7 @@ class FaceProcessor:
             create_video: 是否生成视频，默认为True
             fps: 视频帧率，默认30
             transition_frames: 过渡帧数，默认30
+            use_age_prefix: 是否使用年龄作为文件名前缀，默认为True
         """
         # 创建调试目录
         debug_dir = os.path.join(output_dir, "debug") if debug else None
@@ -467,7 +483,8 @@ class FaceProcessor:
                 debug_dir, 
                 debug, 
                 base_size,
-                add_border
+                add_border,
+                use_age_prefix  # 传递参数
             )
         except Exception as e:
             logger.error(f"处理基准图片时出错: {str(e)}")
@@ -491,8 +508,9 @@ class FaceProcessor:
                         debug,
                         similarity_threshold,
                         add_border,
+                        use_age_prefix  # 传递参数
                     )
-                    pbar.update(1)  # 更新进度条
+                    pbar.update(1)
                 except Exception as e:
                     logger.error(f"处理图片时出错: {os.path.basename(input_path)} - {str(e)}")
                     raise
