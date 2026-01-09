@@ -1,12 +1,16 @@
 """MediaPipe 模型模块
 
 提供 MediaPipe 人脸关键点检测功能。
+使用 MediaPipe 0.10+ 的 Tasks API。
 """
 
 import cv2
 import numpy as np
 import mediapipe as mp
-from typing import Optional, Tuple, Any
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from typing import Optional, Tuple, Any, List
+import os
 
 from ..utils.logging import get_logger
 
@@ -14,19 +18,57 @@ logger = get_logger(__name__)
 
 
 class MediaPipeFaceDetector:
-    """MediaPipe 人脸关键点检测器"""
+    """MediaPipe 人脸关键点检测器 (使用 Tasks API)"""
 
     def __init__(self):
         """初始化 MediaPipe 人脸关键点检测器"""
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            min_detection_confidence=0.1,
-        )
-        # 添加绘制工具
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
+        self.model_path = self._get_model_path()
+        self.face_landmarker = self._create_landmarker()
+
+    def _get_model_path(self) -> str:
+        """获取模型文件路径
+        
+        Returns:
+            str: 模型文件路径
+        """
+        # 检查多个可能的模型文件位置
+        possible_paths = [
+            "models/face_landmarker.task",
+            "models/face_landmarker_v2.task",
+            os.path.join(os.path.dirname(__file__), "../../models/face_landmarker.task"),
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                logger.info(f"找到模型文件: {path}")
+                return path
+        
+        # 如果找不到模型文件，使用默认路径
+        default_path = "models/face_landmarker.task"
+        logger.warning(f"未找到模型文件，将使用: {default_path}")
+        logger.warning("请从 https://github.com/google/mediapipe/releases 下载 face_landmarker.task")
+        return default_path
+
+    def _create_landmarker(self) -> Optional[vision.FaceLandmarker]:
+        """创建 FaceLandmarker 实例
+        
+        Returns:
+            Optional[vision.FaceLandmarker]: FaceLandmarker 实例
+        """
+        try:
+            base_options = python.BaseOptions(model_asset_path=self.model_path)
+            options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+                num_faces=1
+            )
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+            logger.info("FaceLandmarker 创建成功")
+            return landmarker
+        except Exception as e:
+            logger.error(f"创建 FaceLandmarker 失败: {str(e)}")
+            return None
 
     def get_face_landmarks(
         self, img: np.ndarray, bbox: Optional[Tuple[float, float, float, float]] = None
@@ -40,6 +82,10 @@ class MediaPipeFaceDetector:
         Returns:
             Optional[Any]: MediaPipe 检测到的人脸关键点
         """
+        if self.face_landmarker is None:
+            logger.error("FaceLandmarker 未初始化")
+            return None
+
         try:
             # 如果提供了边界框，先裁剪图片
             face_img = img
@@ -50,23 +96,49 @@ class MediaPipeFaceDetector:
             # 转换为RGB格式
             img_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
 
-            # 检测关键点
-            results = self.face_mesh.process(img_rgb)
+            # 创建 MediaPipe 图像对象
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
 
-            if not results.multi_face_landmarks:
+            # 检测关键点
+            detection_result = self.face_landmarker.detect(mp_image)
+
+            if not detection_result.face_landmarks:
                 return None
+
+            # 转换为兼容的数据结构
+            face_landmarks = self._convert_to_legacy_format(detection_result.face_landmarks[0])
 
             # 如果使用了裁剪，需要将关键点坐标转换回原图坐标系
             if bbox is not None:
-                return self._convert_landmarks(
-                    results.multi_face_landmarks[0], bbox, img.shape
-                )
+                face_landmarks = self._convert_landmarks(face_landmarks, bbox, img.shape)
 
-            return results.multi_face_landmarks[0]
+            return face_landmarks
 
         except Exception as e:
             logger.error(f"人脸关键点检测失败: {str(e)}")
             return None
+
+    def _convert_to_legacy_format(self, landmarks: List) -> Any:
+        """将新格式的关键点转换为兼容旧 API 的格式
+        
+        Args:
+            landmarks: 新格式的关键点列表
+            
+        Returns:
+            Any: 兼容旧格式的关键点对象
+        """
+        class NormalizedLandmark:
+            def __init__(self, x, y, z=0.0):
+                self.x = x
+                self.y = y
+                self.z = z
+
+        class NormalizedLandmarkList:
+            def __init__(self, landmarks):
+                self.landmark = landmarks
+
+        converted_landmarks = [NormalizedLandmark(lm.x, lm.y, lm.z) for lm in landmarks]
+        return NormalizedLandmarkList(converted_landmarks)
 
     def get_eye_landmarks(self, face_landmarks: Any) -> Optional[np.ndarray]:
         """获取眼睛关键点
@@ -125,16 +197,18 @@ class MediaPipeFaceDetector:
             img_height, img_width = img_shape[:2]
 
             # 创建新的关键点列表
-            converted_landmarks = type(face_landmarks)()
+            converted_landmarks_list = []
 
             # 复制并转换所有关键点
             for i, landmark in enumerate(face_landmarks.landmark):
-                new_landmark = type(landmark)()
                 # 将相对坐标（0-1）转换为原图坐标系
-                new_landmark.x = (landmark.x * crop_width + x1) / img_width
-                new_landmark.y = (landmark.y * crop_height + y1) / img_height
-                new_landmark.z = landmark.z
-                converted_landmarks.landmark.append(new_landmark)
+                new_x = (landmark.x * crop_width + x1) / img_width
+                new_y = (landmark.y * crop_height + y1) / img_height
+                new_z = landmark.z
+                converted_landmarks_list.append(type(landmark)(new_x, new_y, new_z))
+
+            # 创建新的 NormalizedLandmarkList
+            converted_landmarks = type(face_landmarks)(converted_landmarks_list)
 
             return converted_landmarks
 
@@ -167,16 +241,36 @@ class MediaPipeFaceDetector:
         else:
             img = image.copy()
 
-        # 将相对坐标转换为像素坐标
-        drawing_spec = self.mp_drawing.DrawingSpec(color=color, thickness=1, circle_radius=1)
-        
-        # 绘制人脸网格
-        self.mp_drawing.draw_landmarks(
-            image=img,
-            landmark_list=face_landmarks,
-            connections=self.mp_face_mesh.FACEMESH_TESSELATION,
-            landmark_drawing_spec=None,
-            connection_drawing_spec=drawing_spec
-        )
+        # 绘制关键点
+        h, w = img.shape[:2]
+        for landmark in face_landmarks.landmark:
+            x = int(landmark.x * w)
+            y = int(landmark.y * h)
+            cv2.circle(img, (x, y), 1, color, -1)
 
-        return img 
+        # 绘制一些关键连接线（简化版本）
+        # 眼睛轮廓
+        left_eye_indices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+        right_eye_indices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+        
+        for i in range(len(left_eye_indices) - 1):
+            idx1 = left_eye_indices[i]
+            idx2 = left_eye_indices[i + 1]
+            if idx1 < len(face_landmarks.landmark) and idx2 < len(face_landmarks.landmark):
+                x1 = int(face_landmarks.landmark[idx1].x * w)
+                y1 = int(face_landmarks.landmark[idx1].y * h)
+                x2 = int(face_landmarks.landmark[idx2].x * w)
+                y2 = int(face_landmarks.landmark[idx2].y * h)
+                cv2.line(img, (x1, y1), (x2, y2), color, 1)
+        
+        for i in range(len(right_eye_indices) - 1):
+            idx1 = right_eye_indices[i]
+            idx2 = right_eye_indices[i + 1]
+            if idx1 < len(face_landmarks.landmark) and idx2 < len(face_landmarks.landmark):
+                x1 = int(face_landmarks.landmark[idx1].x * w)
+                y1 = int(face_landmarks.landmark[idx1].y * h)
+                x2 = int(face_landmarks.landmark[idx2].x * w)
+                y2 = int(face_landmarks.landmark[idx2].y * h)
+                cv2.line(img, (x1, y1), (x2, y2), color, 1)
+
+        return img

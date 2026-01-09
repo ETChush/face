@@ -1,0 +1,2 @@
+[console_scripts]
+face = src.main:main
